@@ -19,8 +19,9 @@ console.log(process.env.EMAIL_PASSWORD);
 
 const app = express();
 app.use(bodyParser.json());
+const cors = require('cors');
+app.use(cors());
 
-// Serve static files from the public directory
 app.use(express.static(path.join(__dirname, 'public')));
 
 const connection = mysql.createConnection({
@@ -56,12 +57,13 @@ app.post('/register', async (req, res) => {
 
         connection.beginTransaction(async (err) => {
             if (err) {
+                console.error('Transaction start error:', err);
                 return res.status(500).json({ success: false, message: 'Registration failed.' });
             }
 
             try {
                 const [result] = await connection.promise().query(
-                    'INSERT INTO users (email, password, token, confirmed, fname, lname) VALUES (?, ?, ?, ?, ?, ?)', 
+                    'INSERT INTO users (email, password, confirmation_token, is_confirmed, fname, lname) VALUES (?, ?, ?, ?, ?, ?)', 
                     [email, hashedPassword, token, false, fname, lname]
                 );
 
@@ -74,6 +76,7 @@ app.post('/register', async (req, res) => {
 
                 transporter.sendMail(mailOptions, (error, info) => {
                     if (error) {
+                        console.error('Email sending error:', error); 
                         connection.rollback(() => {
                             return res.status(500).json({ success: false, message: 'Failed to send confirmation email.' });
                         });
@@ -81,6 +84,7 @@ app.post('/register', async (req, res) => {
 
                     connection.commit((err) => {
                         if (err) {
+                            console.error('Transaction commit error:', err); 
                             connection.rollback(() => {
                                 return res.status(500).json({ success: false, message: 'Failed to commit transaction.' });
                             });
@@ -89,12 +93,14 @@ app.post('/register', async (req, res) => {
                     });
                 });
             } catch (error) {
+                console.error('Query execution error:', error); 
                 connection.rollback(() => {
                     return res.status(500).json({ success: false, message: 'Registration failed.' });
                 });
             }
         });
     } catch (error) {
+        console.error('Password hashing error:', error); 
         res.status(500).json({ success: false, message: 'Server error.' });
     }
 });
@@ -103,18 +109,25 @@ app.get('/confirm/:token', async (req, res) => {
     const token = req.params.token;
 
     try {
-        const [result] = await connection.promise().query('UPDATE users SET confirmed = true WHERE token = ?', [token]);
+       
+        const [result] = await connection.promise().query('SELECT * FROM users WHERE confirmation_token = ?', [token]);
 
-        if (result.affectedRows === 0) {
-            return res.status(400).send('Email confirmation failed.');
+    
+        if (result.length === 0) {
+            return res.status(404).send('User not found or invalid token.');
         }
+
+
+        await connection.promise().query('UPDATE users SET is_confirmed = true WHERE confirmation_token = ?', [token]);
+
+
         res.send('Email confirmed successfully!');
     } catch (error) {
-        res.status(500).send('Server error.');
+        console.error('Error confirming email:', error);
+        res.status(500).send('An error occurred while confirming email.');
     }
 });
 
-// Serve index.html for the root path
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
